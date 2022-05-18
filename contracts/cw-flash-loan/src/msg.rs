@@ -25,6 +25,8 @@ pub enum QueryMsg {
     GetConfig {},
     Provided { address: String },
     TotalProvided {},
+    Entitled { address: String },
+    Balance {},
 }
 
 // We define a custom struct for each query response
@@ -32,6 +34,7 @@ pub enum QueryMsg {
 pub struct ConfigResponse {
     pub admin: Option<String>,
     pub fee: Decimal,
+    pub loan_denom: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

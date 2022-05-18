@@ -17,4 +17,7 @@ pub enum ContractError {
 
     #[error("Funds + fee was not returned")]
     NotReturned {},
+
+    #[error("Can not withdraw without providing first")]
+    NoProvisions {},
 }

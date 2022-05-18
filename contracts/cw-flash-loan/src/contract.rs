@@ -1,8 +1,10 @@
+use std::convert::TryInto;
+
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     to_binary, Addr, BankMsg, Binary, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Response,
-    StdResult, Uint128, WasmMsg,
+    StdResult, Uint128, Uint256, WasmMsg,
 };
 use cw2::set_contract_version;
 
@@ -157,6 +159,12 @@ pub fn execute_provide(deps: DepsMut, info: MessageInfo) -> Result<Response, Con
         .add_attribute("provided", provided))
 }
 
+fn compute_entitled(provided: Uint128, total_provided: Uint128, avaliable: Uint128) -> Uint128 {
+    (avaliable.full_mul(provided) / Uint256::from_uint128(total_provided))
+        .try_into()
+        .unwrap()
+}
+
 pub fn execute_withdraw(
     deps: DepsMut,
     env: Env,
@@ -164,15 +172,20 @@ pub fn execute_withdraw(
 ) -> Result<Response, ContractError> {
     let MessageInfo { sender, .. } = info;
     let loan_denom = LOAN_DENOM.load(deps.storage)?;
-    let provided = PROVISIONS.load(deps.storage, sender.clone())?;
     let total_provided = TOTAL_PROVIDED.load(deps.storage)?;
-    let porportion = Decimal::from_ratio(provided, total_provided);
+
+    let provided = if let Some(provision) = PROVISIONS.may_load(deps.storage, sender.clone())? {
+        Ok(provision)
+    } else {
+        Err(ContractError::NoProvisions {})
+    }?;
 
     let avaliable = deps
         .querier
         .query_balance(env.contract.address.into_string(), loan_denom.clone())?
         .amount;
-    let entitled = avaliable * porportion;
+
+    let entitled = compute_entitled(provided, total_provided, avaliable);
 
     PROVISIONS.save(deps.storage, sender.clone(), &Uint128::zero())?;
     TOTAL_PROVIDED.update(deps.storage, |old| -> StdResult<_> {
@@ -182,7 +195,7 @@ pub fn execute_withdraw(
     let withdraw_message = BankMsg::Send {
         to_address: sender.to_string(),
         amount: vec![Coin {
-            amount: entitled,
+            amount: entitled.try_into().unwrap(),
             denom: loan_denom,
         }],
     };
@@ -214,31 +227,75 @@ pub fn execute_assert_balance(
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetConfig {} => query_get_config(deps),
         QueryMsg::Provided { address } => query_provided(deps, address),
         QueryMsg::TotalProvided {} => query_total_provided(deps),
+        QueryMsg::Entitled { address } => query_entitled(deps, env, address),
+        QueryMsg::Balance {} => todo!(),
     }
 }
 
 fn query_get_config(deps: Deps) -> StdResult<Binary> {
     let admin = ADMIN.load(deps.storage)?;
     let fee = FEE.load(deps.storage)?;
+    let loan_denom = LOAN_DENOM.load(deps.storage)?;
 
     to_binary(&ConfigResponse {
         admin: admin.map(|a| a.into()),
         fee,
+        loan_denom,
     })
 }
 
 pub fn query_provided(deps: Deps, address: String) -> StdResult<Binary> {
     let address = deps.api.addr_validate(&address)?;
-    let provided = PROVISIONS.load(deps.storage, address).unwrap_or_default();
-    to_binary(&provided)
+    let provided = PROVISIONS
+        .may_load(deps.storage, address)
+        .unwrap_or_default();
+
+    match provided {
+        Some(provided) => to_binary(&provided),
+        None => to_binary(&Uint128::zero()),
+    }
 }
 
 pub fn query_total_provided(deps: Deps) -> StdResult<Binary> {
     let total = TOTAL_PROVIDED.load(deps.storage)?;
     to_binary(&total)
+}
+
+pub fn query_entitled(deps: Deps, env: Env, address: String) -> StdResult<Binary> {
+    let address = deps.api.addr_validate(&address)?;
+
+    let loan_denom = LOAN_DENOM.load(deps.storage)?;
+    let provided = PROVISIONS.may_load(deps.storage, address)?;
+
+    match provided {
+        Some(provided) => {
+            let total_provided = TOTAL_PROVIDED.load(deps.storage)?;
+
+            let avaliable = deps
+                .querier
+                .query_balance(env.contract.address.into_string(), loan_denom.clone())?
+                .amount;
+
+            let entitled = compute_entitled(provided, total_provided, avaliable);
+
+            to_binary(&entitled)
+        }
+        None => to_binary(&Uint128::zero()),
+    }
+}
+
+pub fn query_balance(deps: Deps, env: Env) -> StdResult<Binary> {
+    let loan_denom = LOAN_DENOM.load(deps.storage)?;
+
+    let avaliable = deps
+        .querier
+        .query_balance(env.contract.address.to_string(), loan_denom)?
+        .amount;
+
+    to_binary(&avaliable)
 }
