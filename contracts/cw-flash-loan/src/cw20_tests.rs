@@ -1,9 +1,9 @@
-use cosmwasm_std::{Addr, Decimal, Empty, Uint128};
+use cosmwasm_std::{to_binary, Addr, Decimal, Empty, Uint128};
 use cw20::Cw20Coin;
 use cw_multi_test::{App, Contract, ContractWrapper, Executor};
 
 use crate::{
-    msg::{ExecuteMsg, InstantiateMsg, LoanDenom},
+    msg::{ExecuteMsg, InstantiateMsg, LoanDenom, QueryMsg},
     ContractError,
 };
 
@@ -40,6 +40,7 @@ struct SetupTestResponse {
     app: App,
     flash_loan: Addr,
     receiver: Addr,
+    cw20: Addr,
 }
 
 fn setup_test(
@@ -47,6 +48,7 @@ fn setup_test(
     receiver_balance: Uint128,
     receiver_return_amount: Uint128,
     fee: Decimal,
+    mut initial_balances: Vec<Cw20Coin>,
 ) -> SetupTestResponse {
     let mut app = App::default();
 
@@ -68,6 +70,15 @@ fn setup_test(
         )
         .unwrap();
 
+    initial_balances.push(Cw20Coin {
+        address: CREATOR_ADDR.to_string(),
+        amount: flash_balance,
+    });
+    initial_balances.push(Cw20Coin {
+        address: receiver.to_string(),
+        amount: receiver_balance,
+    });
+
     let cw20 = app
         .instantiate_contract(
             cw20_code,
@@ -76,16 +87,7 @@ fn setup_test(
                 name: "Floob Token".to_string(),
                 symbol: "FLOOB".to_string(),
                 decimals: 6,
-                initial_balances: vec![
-                    Cw20Coin {
-                        address: CREATOR_ADDR.to_string(),
-                        amount: flash_balance,
-                    },
-                    Cw20Coin {
-                        address: receiver.to_string(),
-                        amount: receiver_balance,
-                    },
-                ],
+                initial_balances,
                 mint: None,
                 marketing: None,
             },
@@ -112,21 +114,24 @@ fn setup_test(
         )
         .unwrap();
 
-    app.execute_contract(
-        Addr::unchecked(CREATOR_ADDR),
-        cw20,
-        &cw20::Cw20ExecuteMsg::Transfer {
-            recipient: flash_loan.to_string(),
-            amount: Uint128::new(100),
-        },
-        &[],
-    )
-    .unwrap();
+    if !flash_balance.is_zero() {
+        app.execute_contract(
+            Addr::unchecked(CREATOR_ADDR),
+            cw20.clone(),
+            &cw20::Cw20ExecuteMsg::Transfer {
+                recipient: flash_loan.to_string(),
+                amount: flash_balance,
+            },
+            &[],
+        )
+        .unwrap();
+    }
 
     SetupTestResponse {
         app,
         flash_loan,
         receiver,
+        cw20,
     }
 }
 
@@ -136,11 +141,13 @@ fn test_simple_loan() {
         mut app,
         flash_loan,
         receiver,
+        ..
     } = setup_test(
         Uint128::new(100),
         Uint128::new(1),
         Uint128::new(101),
         Decimal::percent(1),
+        vec![],
     );
 
     app.execute_contract(
@@ -161,11 +168,13 @@ fn test_simple_loan_no_return() {
         mut app,
         flash_loan,
         receiver,
+        ..
     } = setup_test(
         Uint128::new(100),
         Uint128::new(1),
         Uint128::new(100),
         Decimal::percent(1),
+        vec![],
     );
 
     let err: ContractError = app
@@ -183,4 +192,105 @@ fn test_simple_loan_no_return() {
         .unwrap();
 
     assert!(matches!(err, ContractError::NotReturned {}))
+}
+
+#[test]
+fn test_provider_rewards() {
+    let SetupTestResponse {
+        mut app,
+        flash_loan,
+        receiver,
+        cw20,
+    } = setup_test(
+        Uint128::new(0),
+        Uint128::new(100),
+        Uint128::new(200),
+        Decimal::percent(100),
+        (0..10)
+            .into_iter()
+            .map(|i| Cw20Coin {
+                address: format!("address_{}", i),
+                amount: Uint128::new(10),
+            })
+            .collect(),
+    );
+
+    for i in 0..10 {
+        let address = format!("address_{}", i);
+        app.execute_contract(
+            Addr::unchecked(&address),
+            cw20.clone(),
+            &cw20::Cw20ExecuteMsg::Send {
+                contract: flash_loan.to_string(),
+                amount: Uint128::new(10),
+                msg: to_binary("").unwrap(),
+            },
+            &[],
+        )
+        .unwrap();
+
+        let provided: Uint128 = app
+            .wrap()
+            .query_wasm_smart(flash_loan.clone(), &QueryMsg::Provided { address })
+            .unwrap();
+        assert_eq!(provided, Uint128::new(10));
+    }
+
+    app.execute_contract(
+        Addr::unchecked(CREATOR_ADDR),
+        flash_loan.clone(),
+        &ExecuteMsg::Loan {
+            receiver: receiver.to_string(),
+            amount: Uint128::new(100),
+        },
+        &[],
+    )
+    .unwrap();
+
+    // Withdraw. All the addresses should now have 20 floob.
+    for i in 0..10 {
+        let address = format!("address_{}", i);
+
+        app.execute_contract(
+            Addr::unchecked(&address),
+            flash_loan.clone(),
+            &ExecuteMsg::Withdraw {},
+            &[],
+        )
+        .unwrap();
+
+        let balance: cw20::BalanceResponse = app
+            .wrap()
+            .query_wasm_smart(cw20.clone(), &cw20::Cw20QueryMsg::Balance { address })
+            .unwrap();
+        assert_eq!(balance.balance, Uint128::new(20));
+    }
+}
+
+#[test]
+fn test_withdraw_no_provision() {
+    let SetupTestResponse {
+        mut app,
+        flash_loan,
+        ..
+    } = setup_test(
+        Uint128::new(100),
+        Uint128::new(1),
+        Uint128::new(100),
+        Decimal::percent(1),
+        vec![],
+    );
+
+    let err: ContractError = app
+        .execute_contract(
+            Addr::unchecked(CREATOR_ADDR),
+            flash_loan,
+            &ExecuteMsg::Withdraw {},
+            &[],
+        )
+        .unwrap_err()
+        .downcast()
+        .unwrap();
+
+    assert!(matches!(err, ContractError::NoProvisions {}))
 }

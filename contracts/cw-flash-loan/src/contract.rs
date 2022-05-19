@@ -59,7 +59,7 @@ pub fn execute(
         ExecuteMsg::AssertBalance { amount } => execute_assert_balance(deps.as_ref(), env, amount),
         ExecuteMsg::Provide {} => execute_provide_native(deps, info),
         ExecuteMsg::Withdraw {} => execute_withdraw(deps, env, info),
-        ExecuteMsg::ReceiveCw20(cw20::Cw20ReceiveMsg {
+        ExecuteMsg::Receive(cw20::Cw20ReceiveMsg {
             sender,
             amount,
             // Intentionally ignore message field. No additional

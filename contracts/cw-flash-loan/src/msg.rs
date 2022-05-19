@@ -25,7 +25,7 @@ pub enum ExecuteMsg {
     AssertBalance { amount: Uint128 },
     Provide {},
     Withdraw {},
-    ReceiveCw20(cw20::Cw20ReceiveMsg),
+    Receive(cw20::Cw20ReceiveMsg),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
