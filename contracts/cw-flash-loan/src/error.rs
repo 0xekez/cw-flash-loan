@@ -15,6 +15,12 @@ pub enum ContractError {
     #[error("Invalid funds. Expected denom ({denom})")]
     WrongFunds { denom: String },
 
+    #[error("Attempted to provide native tokens when cw20 tokens were expected")]
+    Cw20Expected {},
+
+    #[error("Attempted to provide cw20 tokens when native tokens were expected")]
+    NativeExpected {},
+
     #[error("Funds + fee was not returned")]
     NotReturned {},
 

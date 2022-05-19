@@ -179,6 +179,8 @@ dependencies = [
  "cw-simple-loan-receiver",
  "cw-storage-plus",
  "cw2",
+ "cw20",
+ "cw20-base",
  "schemars",
  "serde",
  "thiserror",
@@ -228,6 +230,7 @@ dependencies = [
  "cw-multi-test",
  "cw-storage-plus",
  "cw2",
+ "cw20",
  "schemars",
  "serde",
  "thiserror",
@@ -266,6 +269,34 @@ dependencies = [
  "cw-storage-plus",
  "schemars",
  "serde",
+]
+
+[[package]]
+name = "cw20"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "356d364602c5fe763544ea00d485b825d6ef519a2fc6a3145528d7df3a603f40"
+dependencies = [
+ "cosmwasm-std",
+ "cw-utils",
+ "schemars",
+ "serde",
+]
+
+[[package]]
+name = "cw20-base"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b370e5fb6b35db58cabd7903b8f9bd4c3bcff701c63bf1a7185a84e60bfa502"
+dependencies = [
+ "cosmwasm-std",
+ "cw-storage-plus",
+ "cw-utils",
+ "cw2",
+ "cw20",
+ "schemars",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]

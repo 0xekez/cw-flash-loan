@@ -3,14 +3,14 @@ use std::convert::TryInto;
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    to_binary, Addr, BankMsg, Binary, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Response,
-    StdResult, Uint128, Uint256, WasmMsg,
+    to_binary, Addr, BankMsg, Binary, Coin, CosmosMsg, Decimal, Deps, DepsMut, Env, MessageInfo,
+    Response, StdResult, Uint128, Uint256, WasmMsg,
 };
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ConfigResponse, ExecuteMsg, InstantiateMsg, LoanMsg, QueryMsg};
-use crate::state::{ADMIN, FEE, LOAN_DENOM, PROVISIONS, TOTAL_PROVIDED};
+use crate::state::{CheckedLoanDenom, ADMIN, FEE, LOAN_DENOM, PROVISIONS, TOTAL_PROVIDED};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:cw-flash-loan";
@@ -26,10 +26,11 @@ pub fn instantiate(
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
     let admin = msg.admin.map(|a| deps.api.addr_validate(&a)).transpose()?;
+    let loan_denom = msg.loan_denom.into_checked(deps.as_ref())?;
 
     ADMIN.save(deps.storage, &admin)?;
     FEE.save(deps.storage, &msg.fee)?;
-    LOAN_DENOM.save(deps.storage, &msg.loan_denom)?;
+    LOAN_DENOM.save(deps.storage, &loan_denom)?;
     TOTAL_PROVIDED.save(deps.storage, &Uint128::zero())?;
 
     Ok(Response::new()
@@ -56,8 +57,15 @@ pub fn execute(
         }
         ExecuteMsg::Loan { receiver, amount } => execute_loan(deps, env, receiver, amount),
         ExecuteMsg::AssertBalance { amount } => execute_assert_balance(deps.as_ref(), env, amount),
-        ExecuteMsg::Provide {} => execute_provide(deps, info),
+        ExecuteMsg::Provide {} => execute_provide_native(deps, info),
         ExecuteMsg::Withdraw {} => execute_withdraw(deps, env, info),
+        ExecuteMsg::ReceiveCw20(cw20::Cw20ReceiveMsg {
+            sender,
+            amount,
+            // Intentionally ignore message field. No additional
+            // validation really to be done with this.
+            msg: _,
+        }) => execute_provide_cw20(deps, info, sender, amount),
     }
 }
 
@@ -97,19 +105,24 @@ pub fn execute_loan(
     let fee = FEE.load(deps.storage)?;
     let loan_denom = LOAN_DENOM.load(deps.storage)?;
 
-    let execute_msg = WasmMsg::Execute {
-        contract_addr: receiver.clone(),
-        msg: to_binary(&LoanMsg::Receive {})?,
-        funds: vec![Coin {
-            amount,
-            denom: loan_denom.clone(),
-        }],
-    };
+    let avaliable = query_avaliable_balance(deps.as_ref(), &env, &loan_denom)?;
 
-    let avaliable = deps
-        .querier
-        .query_balance(env.contract.address.to_string(), loan_denom)?
-        .amount;
+    let execute_msg = match loan_denom {
+        CheckedLoanDenom::Cw20 { address } => WasmMsg::Execute {
+            contract_addr: address.into_string(),
+            msg: to_binary(&cw20::Cw20ExecuteMsg::Send {
+                amount,
+                msg: to_binary(&LoanMsg::ReceiveLoan {})?,
+                contract: receiver.clone(),
+            })?,
+            funds: vec![],
+        },
+        CheckedLoanDenom::Native { denom } => WasmMsg::Execute {
+            contract_addr: receiver.clone(),
+            msg: to_binary(&LoanMsg::ReceiveLoan {})?,
+            funds: vec![Coin { amount, denom }],
+        },
+    };
 
     // Expect that we will get everything back plus the fee applied to
     // the amount borrowed. For example, if the contract holds 200
@@ -118,7 +131,7 @@ pub fn execute_loan(
     let expected = avaliable + (fee * amount);
 
     let return_msg = WasmMsg::Execute {
-        contract_addr: env.contract.address.to_string(),
+        contract_addr: env.contract.address.into_string(),
         msg: to_binary(&ExecuteMsg::AssertBalance { amount: expected })?,
         funds: vec![],
     };
@@ -141,10 +154,23 @@ fn get_only_denom_amount(funds: Vec<Coin>, denom: String) -> Result<Uint128, Con
     Ok(provided.amount)
 }
 
-pub fn execute_provide(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
-    let MessageInfo { sender, funds } = info;
+pub fn execute_provide_cw20(
+    deps: DepsMut,
+    info: MessageInfo,
+    sender: String,
+    amount: Uint128,
+) -> Result<Response, ContractError> {
     let loan_denom = LOAN_DENOM.load(deps.storage)?;
-    let provided = get_only_denom_amount(funds, loan_denom)?;
+    let loan_token = match loan_denom {
+        CheckedLoanDenom::Cw20 { address } => address,
+        CheckedLoanDenom::Native { .. } => return Err(ContractError::NativeExpected {}),
+    };
+    if loan_token != info.sender {
+        return Err(ContractError::Unauthorized {});
+    }
+    let sender = deps.api.addr_validate(&sender)?;
+
+    let provided = amount;
 
     PROVISIONS.update(deps.storage, sender.clone(), |old| -> StdResult<_> {
         Ok(old.unwrap_or_default().checked_add(provided)?)
@@ -154,7 +180,28 @@ pub fn execute_provide(deps: DepsMut, info: MessageInfo) -> Result<Response, Con
     })?;
 
     Ok(Response::new()
-        .add_attribute("method", "provide")
+        .add_attribute("method", "provide_native")
+        .add_attribute("provider", sender)
+        .add_attribute("provided", provided))
+}
+
+pub fn execute_provide_native(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
+    let MessageInfo { sender, funds } = info;
+    let loan_denom = LOAN_DENOM.load(deps.storage)?;
+    let provided = match loan_denom {
+        CheckedLoanDenom::Cw20 { .. } => return Err(ContractError::Cw20Expected {}),
+        CheckedLoanDenom::Native { denom } => get_only_denom_amount(funds, denom)?,
+    };
+
+    PROVISIONS.update(deps.storage, sender.clone(), |old| -> StdResult<_> {
+        Ok(old.unwrap_or_default().checked_add(provided)?)
+    })?;
+    TOTAL_PROVIDED.update(deps.storage, |old| -> StdResult<_> {
+        Ok(old.checked_add(provided)?)
+    })?;
+
+    Ok(Response::new()
+        .add_attribute("method", "provide_native")
         .add_attribute("provider", sender)
         .add_attribute("provided", provided))
 }
@@ -180,10 +227,7 @@ pub fn execute_withdraw(
         Err(ContractError::NoProvisions {})
     }?;
 
-    let avaliable = deps
-        .querier
-        .query_balance(env.contract.address.into_string(), loan_denom.clone())?
-        .amount;
+    let avaliable = query_avaliable_balance(deps.as_ref(), &env, &loan_denom)?;
 
     let entitled = compute_entitled(provided, total_provided, avaliable);
 
@@ -192,12 +236,24 @@ pub fn execute_withdraw(
         Ok(old.checked_sub(provided)?)
     })?;
 
-    let withdraw_message = BankMsg::Send {
-        to_address: sender.to_string(),
-        amount: vec![Coin {
-            amount: entitled.try_into().unwrap(),
-            denom: loan_denom,
-        }],
+    let withdraw_message: CosmosMsg = match loan_denom {
+        CheckedLoanDenom::Cw20 { address } => WasmMsg::Execute {
+            contract_addr: address.into_string(),
+            msg: to_binary(&cw20::Cw20ExecuteMsg::Transfer {
+                recipient: sender.to_string(),
+                amount: entitled,
+            })?,
+            funds: vec![],
+        }
+        .into(),
+        CheckedLoanDenom::Native { denom } => BankMsg::Send {
+            to_address: sender.to_string(),
+            amount: vec![Coin {
+                amount: entitled,
+                denom,
+            }],
+        }
+        .into(),
     };
 
     Ok(Response::new()
@@ -214,10 +270,7 @@ pub fn execute_assert_balance(
 ) -> Result<Response, ContractError> {
     let loan_denom = LOAN_DENOM.load(deps.storage)?;
 
-    let avaliable = deps
-        .querier
-        .query_balance(env.contract.address.to_string(), loan_denom)?
-        .amount;
+    let avaliable = query_avaliable_balance(deps, &env, &loan_denom)?;
 
     if avaliable != expected {
         Err(ContractError::NotReturned {})
@@ -233,11 +286,34 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::Provided { address } => query_provided(deps, address),
         QueryMsg::TotalProvided {} => query_total_provided(deps),
         QueryMsg::Entitled { address } => query_entitled(deps, env, address),
-        QueryMsg::Balance {} => todo!(),
+        QueryMsg::Balance {} => query_balance(deps, env),
     }
 }
 
-fn query_get_config(deps: Deps) -> StdResult<Binary> {
+fn query_avaliable_balance(
+    deps: Deps,
+    env: &Env,
+    loan_denom: &CheckedLoanDenom,
+) -> StdResult<Uint128> {
+    Ok(match loan_denom {
+        CheckedLoanDenom::Cw20 { address } => {
+            let balance: cw20::BalanceResponse = deps.querier.query_wasm_smart(
+                address.to_string(),
+                &cw20::Cw20QueryMsg::Balance {
+                    address: env.contract.address.to_string(),
+                },
+            )?;
+            balance.balance
+        }
+        CheckedLoanDenom::Native { denom } => {
+            deps.querier
+                .query_balance(&env.contract.address, denom)?
+                .amount
+        }
+    })
+}
+
+pub fn query_get_config(deps: Deps) -> StdResult<Binary> {
     let admin = ADMIN.load(deps.storage)?;
     let fee = FEE.load(deps.storage)?;
     let loan_denom = LOAN_DENOM.load(deps.storage)?;
@@ -276,10 +352,7 @@ pub fn query_entitled(deps: Deps, env: Env, address: String) -> StdResult<Binary
         Some(provided) => {
             let total_provided = TOTAL_PROVIDED.load(deps.storage)?;
 
-            let avaliable = deps
-                .querier
-                .query_balance(env.contract.address.into_string(), loan_denom.clone())?
-                .amount;
+            let avaliable = query_avaliable_balance(deps, &env, &loan_denom)?;
 
             let entitled = compute_entitled(provided, total_provided, avaliable);
 
@@ -291,11 +364,7 @@ pub fn query_entitled(deps: Deps, env: Env, address: String) -> StdResult<Binary
 
 pub fn query_balance(deps: Deps, env: Env) -> StdResult<Binary> {
     let loan_denom = LOAN_DENOM.load(deps.storage)?;
-
-    let avaliable = deps
-        .querier
-        .query_balance(env.contract.address.to_string(), loan_denom)?
-        .amount;
+    let avaliable = query_avaliable_balance(deps, &env, &loan_denom)?;
 
     to_binary(&avaliable)
 }

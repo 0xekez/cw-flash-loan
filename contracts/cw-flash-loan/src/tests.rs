@@ -2,7 +2,7 @@ use cosmwasm_std::{Addr, Coin, Decimal, Empty, Uint128};
 use cw_multi_test::{App, BankSudo, Contract, ContractWrapper, Executor, SudoMsg};
 
 use crate::{
-    msg::{ExecuteMsg, InstantiateMsg, QueryMsg},
+    msg::{ExecuteMsg, InstantiateMsg, LoanDenom, QueryMsg},
     ContractError,
 };
 
@@ -40,7 +40,9 @@ fn test_simple_loan() {
             &InstantiateMsg {
                 admin: Some(CREATOR_ADDR.to_string()),
                 fee: Decimal::percent(1),
-                loan_denom: "ujuno".to_string(),
+                loan_denom: LoanDenom::Native {
+                    denom: "ujuno".to_string(),
+                },
             },
             &[],
             "flash-loan",
@@ -111,7 +113,9 @@ fn test_failed_loan() {
             &InstantiateMsg {
                 admin: Some(CREATOR_ADDR.to_string()),
                 fee: Decimal::percent(1),
-                loan_denom: "ujuno".to_string(),
+                loan_denom: LoanDenom::Native {
+                    denom: "ujuno".to_string(),
+                },
             },
             &[],
             "flash-loan",
@@ -177,7 +181,9 @@ fn test_provider_rewards() {
             &InstantiateMsg {
                 admin: Some(CREATOR_ADDR.to_string()),
                 fee: Decimal::percent(100),
-                loan_denom: "ujuno".to_string(),
+                loan_denom: LoanDenom::Native {
+                    denom: "ujuno".to_string(),
+                },
             },
             &[],
             "flash-loan",
@@ -280,7 +286,9 @@ fn test_withdraw_no_provision() {
             &InstantiateMsg {
                 admin: Some(CREATOR_ADDR.to_string()),
                 fee: Decimal::percent(100),
-                loan_denom: "ujuno".to_string(),
+                loan_denom: LoanDenom::Native {
+                    denom: "ujuno".to_string(),
+                },
             },
             &[],
             "flash-loan",
@@ -337,7 +345,10 @@ fn test_withdraw_rounding() {
             &InstantiateMsg {
                 admin: Some(CREATOR_ADDR.to_string()),
                 fee: Decimal::percent(100),
-                loan_denom: "ujuno".to_string(),
+
+                loan_denom: LoanDenom::Native {
+                    denom: "ujuno".to_string(),
+                },
             },
             &[],
             "flash-loan",
@@ -443,7 +454,9 @@ fn test_adversarial_withdraw() {
             &InstantiateMsg {
                 admin: Some(CREATOR_ADDR.to_string()),
                 fee: Decimal::percent(100),
-                loan_denom: "ujuno".to_string(),
+                loan_denom: LoanDenom::Native {
+                    denom: "ujuno".to_string(),
+                },
             },
             &[],
             "flash-loan",
