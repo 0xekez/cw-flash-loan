@@ -1,0 +1,15 @@
+A CosmWasm contract for cw20 and native token flash loans. Providers
+provide liquidity for loans and receive loan fees porportional to the
+amount of tokens they have provided. An optional admin (ideally, a
+DAO) may update the fee at their convenience.
+
+Each instantiation of the contract may only provide loans in one
+denomination. To provide loans in multiple denominations one should
+deploy more than once version of the contract.
+
+This contract is unaudited and does not yet support migrations in the
+event of a vulnerability. Take care. Do not use this for anything
+mission critical.
+
+This program is licensed under the AGPL. See the LICENSE file for more
+information. 
