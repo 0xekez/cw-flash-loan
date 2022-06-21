@@ -294,3 +294,151 @@ fn test_withdraw_no_provision() {
 
     assert!(matches!(err, ContractError::NoProvisions {}))
 }
+
+#[test]
+fn test_rewards_drain() {
+    let SetupTestResponse {
+        mut app,
+        flash_loan,
+        cw20,
+        ..
+    } = setup_test(
+        Uint128::new(200),
+        Uint128::zero(),
+        Uint128::zero(),
+        Decimal::percent(0),
+        vec![
+            Cw20Coin {
+                address: "first".to_string(),
+                amount: Uint128::new(100),
+            },
+            Cw20Coin {
+                address: "second".to_string(),
+                amount: Uint128::new(100),
+            },
+        ],
+    );
+
+    // Because the contract has funds before any funds are provided,
+    // when this address provides fudns it sets a balance per provied
+    // ratio of 1/3.
+    app.execute_contract(
+        Addr::unchecked("first"),
+        cw20.clone(),
+        &cw20::Cw20ExecuteMsg::Send {
+            contract: flash_loan.to_string(),
+            amount: Uint128::new(100),
+            msg: to_binary("").unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    // When this contract funds, because the balance per provided
+    // ratio is 1/3 they have one third the claim to the profits that
+    // the first address does. As a result their "provided" value
+    // becomes 33 while the other address has a provided value of 100.
+    app.execute_contract(
+        Addr::unchecked("second"),
+        cw20.clone(),
+        &cw20::Cw20ExecuteMsg::Send {
+            contract: flash_loan.to_string(),
+            amount: Uint128::new(100),
+            msg: to_binary("").unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    // Address withdraws and collects rewards.
+    //
+    // This address has provided 100, there are 133 total provided,
+    // and a balance of 400. This makes this addresses' entitlement
+    // 400 * 100 / 133 = 300 (with rounding down).
+    //
+    // Rounding like this will be much less sizeable in real
+    // deployments as provisions are happenign in the order of macro
+    // denominations (10^6 larger).
+    app.execute_contract(
+        Addr::unchecked("first"),
+        flash_loan.clone(),
+        &ExecuteMsg::Withdraw {},
+        &[],
+    )
+    .unwrap();
+
+    let balance: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            cw20.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: "first".to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(balance.balance, Uint128::new(300));
+
+    // Providing again with this larger number should not entitle this
+    // address to additional rewards.
+    app.execute_contract(
+        Addr::unchecked("first"),
+        cw20.clone(),
+        &cw20::Cw20ExecuteMsg::Send {
+            contract: flash_loan.to_string(),
+            amount: Uint128::new(300),
+            msg: to_binary("").unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        Addr::unchecked("first"),
+        flash_loan.clone(),
+        &ExecuteMsg::Withdraw {},
+        &[],
+    )
+    .unwrap();
+
+    let balance: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            cw20.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: "first".to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(balance.balance, Uint128::new(300));
+
+    // Address two withdraws and collects rewards.
+    //
+    // This address has provided 33, there are 33 total provided,
+    // and a balance of 100. This makes this addresses' entitlement
+    // 100 * 33 / 33 = 100.
+    //
+    // Rounding like this will be much less sizeable in real
+    // deployments as provisions are happenign in the order of macro
+    // denominations (10^6 larger).
+    app.execute_contract(
+        Addr::unchecked("second"),
+        flash_loan.clone(),
+        &ExecuteMsg::Withdraw {},
+        &[],
+    )
+    .unwrap();
+
+    let balance: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            cw20.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: "second".to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(balance.balance, Uint128::new(100));
+}

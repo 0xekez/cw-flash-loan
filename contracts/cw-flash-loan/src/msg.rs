@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::state::CheckedLoanDenom;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum LoanDenom {
     Cw20 { address: String },
     Native { denom: String },

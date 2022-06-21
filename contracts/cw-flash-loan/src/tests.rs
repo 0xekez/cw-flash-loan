@@ -544,11 +544,130 @@ fn test_adversarial_withdraw() {
     )
     .unwrap();
 
-    // Re-providing should not increase entitled amount.
+    // Re-providing should not increase entitled amount. In this case
+    // we get rounded down.
     let entitled: Uint128 = app
         .wrap()
         .query_wasm_smart(flash_loan, &QueryMsg::Entitled { address: second })
         .unwrap();
 
-    assert_eq!(entitled, Uint128::new(102))
+    assert_eq!(entitled, Uint128::new(101))
+}
+
+#[test]
+fn test_rewards_drain() {
+    let mut app = App::default();
+
+    let flash_code = app.store_code(flash_loan_contract());
+
+    let flash_loan = app
+        .instantiate_contract(
+            flash_code,
+            Addr::unchecked(CREATOR_ADDR),
+            &InstantiateMsg {
+                admin: Some(CREATOR_ADDR.to_string()),
+                fee: Decimal::percent(100),
+                loan_denom: LoanDenom::Native {
+                    denom: "ujuno".to_string(),
+                },
+            },
+            &[],
+            "flash-loan",
+            None,
+        )
+        .unwrap();
+
+    let first = "first".to_string();
+    let second = "second".to_string();
+
+    app.sudo(SudoMsg::Bank(BankSudo::Mint {
+        amount: vec![Coin {
+            amount: Uint128::new(100),
+            denom: "ujuno".to_string(),
+        }],
+        to_address: first.clone(),
+    }))
+    .unwrap();
+
+    app.execute_contract(
+        Addr::unchecked(&first),
+        flash_loan.clone(),
+        &ExecuteMsg::Provide {},
+        &[Coin {
+            amount: Uint128::new(100),
+            denom: "ujuno".to_string(),
+        }],
+    )
+    .unwrap();
+
+    app.sudo(SudoMsg::Bank(BankSudo::Mint {
+        amount: vec![Coin {
+            amount: Uint128::new(100),
+            denom: "ujuno".to_string(),
+        }],
+        to_address: second.clone(),
+    }))
+    .unwrap();
+
+    app.execute_contract(
+        Addr::unchecked(&second),
+        flash_loan.clone(),
+        &ExecuteMsg::Provide {},
+        &[Coin {
+            amount: Uint128::new(100),
+            denom: "ujuno".to_string(),
+        }],
+    )
+    .unwrap();
+
+    // Tons of flash loans happen and now the contract has a lot of
+    // money.
+    app.sudo(SudoMsg::Bank(BankSudo::Mint {
+        amount: vec![Coin {
+            amount: Uint128::new(200),
+            denom: "ujuno".to_string(),
+        }],
+        to_address: flash_loan.to_string(),
+    }))
+    .unwrap();
+
+    // Address withdraws and collects rewards.
+    app.execute_contract(
+        Addr::unchecked(&first),
+        flash_loan.clone(),
+        &ExecuteMsg::Withdraw {},
+        &[],
+    )
+    .unwrap();
+    let balance = app
+        .wrap()
+        .query_balance(first.clone(), "ujuno".to_string())
+        .unwrap();
+    assert_eq!(balance.amount, Uint128::new(200));
+
+    // Now, address provides again with rewards + initial amount.
+    app.execute_contract(
+        Addr::unchecked(&first),
+        flash_loan.clone(),
+        &ExecuteMsg::Provide {},
+        &[Coin {
+            amount: Uint128::new(200),
+            denom: "ujuno".to_string(),
+        }],
+    )
+    .unwrap();
+
+    // Address withdraws. They should not receive additional tokens.
+    app.execute_contract(
+        Addr::unchecked(&first),
+        flash_loan.clone(),
+        &ExecuteMsg::Withdraw {},
+        &[],
+    )
+    .unwrap();
+    let balance = app
+        .wrap()
+        .query_balance(first.clone(), "ujuno".to_string())
+        .unwrap();
+    assert_eq!(balance.amount, Uint128::new(200));
 }

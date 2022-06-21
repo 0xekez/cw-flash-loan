@@ -57,7 +57,7 @@ pub fn execute(
         }
         ExecuteMsg::Loan { receiver, amount } => execute_loan(deps, env, receiver, amount),
         ExecuteMsg::AssertBalance { amount } => execute_assert_balance(deps.as_ref(), env, amount),
-        ExecuteMsg::Provide {} => execute_provide_native(deps, info),
+        ExecuteMsg::Provide {} => execute_provide_native(deps, env, info),
         ExecuteMsg::Withdraw {} => execute_withdraw(deps, env, info),
         ExecuteMsg::Receive(cw20::Cw20ReceiveMsg {
             sender,
@@ -65,7 +65,7 @@ pub fn execute(
             // Intentionally ignore message field. No additional
             // validation really to be done with this.
             msg: _,
-        }) => execute_provide_cw20(deps, info, sender, amount),
+        }) => execute_provide_cw20(deps, env, info, sender, amount),
     }
 }
 
@@ -156,54 +156,88 @@ fn get_only_denom_amount(funds: Vec<Coin>, denom: String) -> Result<Uint128, Con
 
 pub fn execute_provide_cw20(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
     sender: String,
     amount: Uint128,
 ) -> Result<Response, ContractError> {
     let loan_denom = LOAN_DENOM.load(deps.storage)?;
-    let loan_token = match loan_denom {
+    let loan_token = match &loan_denom {
         CheckedLoanDenom::Cw20 { address } => address,
         CheckedLoanDenom::Native { .. } => return Err(ContractError::NativeExpected {}),
     };
-    if loan_token != info.sender {
+    if *loan_token != info.sender {
         return Err(ContractError::Unauthorized {});
     }
     let sender = deps.api.addr_validate(&sender)?;
 
     let provided = amount;
+    let balance = query_avaliable_balance(deps.as_ref(), &env, &loan_denom)? - provided;
+    let total_provied = TOTAL_PROVIDED.load(deps.storage)?;
 
-    PROVISIONS.update(deps.storage, sender.clone(), |old| -> StdResult<_> {
-        Ok(old.unwrap_or_default().checked_add(provided)?)
-    })?;
-    TOTAL_PROVIDED.update(deps.storage, |old| -> StdResult<_> {
-        Ok(old.checked_add(provided)?)
-    })?;
-
-    Ok(Response::new()
-        .add_attribute("method", "provide_native")
-        .add_attribute("provider", sender)
-        .add_attribute("provided", provided))
-}
-
-pub fn execute_provide_native(deps: DepsMut, info: MessageInfo) -> Result<Response, ContractError> {
-    let MessageInfo { sender, funds } = info;
-    let loan_denom = LOAN_DENOM.load(deps.storage)?;
-    let provided = match loan_denom {
-        CheckedLoanDenom::Cw20 { .. } => return Err(ContractError::Cw20Expected {}),
-        CheckedLoanDenom::Native { denom } => get_only_denom_amount(funds, denom)?,
+    let amount_to_provide = if total_provied.is_zero() || balance.is_zero() {
+        provided
+    } else {
+        // The amount you receive is (balance per provided) *
+        // provided. This stops being able to withdraw and then
+        // instantly deposit to drain the rewards from the contract.
+        (total_provied.full_mul(provided) / Uint256::from_uint128(balance))
+            .try_into()
+            .unwrap()
     };
 
     PROVISIONS.update(deps.storage, sender.clone(), |old| -> StdResult<_> {
-        Ok(old.unwrap_or_default().checked_add(provided)?)
+        Ok(old.unwrap_or_default().checked_add(amount_to_provide)?)
     })?;
     TOTAL_PROVIDED.update(deps.storage, |old| -> StdResult<_> {
-        Ok(old.checked_add(provided)?)
+        Ok(old.checked_add(amount_to_provide)?)
     })?;
 
     Ok(Response::new()
         .add_attribute("method", "provide_native")
         .add_attribute("provider", sender)
-        .add_attribute("provided", provided))
+        .add_attribute("provided", amount_to_provide))
+}
+
+pub fn execute_provide_native(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+) -> Result<Response, ContractError> {
+    let MessageInfo { sender, funds } = info;
+    let loan_denom = LOAN_DENOM.load(deps.storage)?;
+    let provided = match &loan_denom {
+        CheckedLoanDenom::Cw20 { .. } => return Err(ContractError::Cw20Expected {}),
+        CheckedLoanDenom::Native { denom } => get_only_denom_amount(funds, denom.clone())?,
+    };
+
+    // Need to use balance before we provided for this computaton as
+    // our porportional entitlement needs to be set at the old rate.
+    let balance = query_avaliable_balance(deps.as_ref(), &env, &loan_denom)? - provided;
+    let total_provied = TOTAL_PROVIDED.load(deps.storage)?;
+
+    let amount_to_provide = if total_provied.is_zero() || balance.is_zero() {
+        provided
+    } else {
+        // The amount you receive is (balance per provided) *
+        // provided. This stops being able to withdraw and then
+        // instantly deposit to drain the rewards from the contract.
+        (total_provied.full_mul(provided) / Uint256::from_uint128(balance))
+            .try_into()
+            .unwrap()
+    };
+
+    PROVISIONS.update(deps.storage, sender.clone(), |old| -> StdResult<_> {
+        Ok(old.unwrap_or_default().checked_add(amount_to_provide)?)
+    })?;
+    TOTAL_PROVIDED.update(deps.storage, |old| -> StdResult<_> {
+        Ok(old.checked_add(amount_to_provide)?)
+    })?;
+
+    Ok(Response::new()
+        .add_attribute("method", "provide_native")
+        .add_attribute("provider", sender)
+        .add_attribute("provided", amount_to_provide))
 }
 
 fn compute_entitled(provided: Uint128, total_provided: Uint128, avaliable: Uint128) -> Uint128 {
