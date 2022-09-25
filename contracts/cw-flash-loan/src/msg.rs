@@ -1,25 +1,22 @@
+use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Decimal, Deps, StdResult, Uint128};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::state::CheckedLoanDenom;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[cw_serde]
 pub enum LoanDenom {
     Cw20 { address: String },
     Native { denom: String },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct InstantiateMsg {
     pub admin: Option<String>,
     pub fee: Decimal,
     pub loan_denom: LoanDenom,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[cw_serde]
 pub enum ExecuteMsg {
     UpdateConfig { admin: Option<String>, fee: Decimal },
     Loan { receiver: String, amount: Uint128 },
@@ -29,26 +26,29 @@ pub enum ExecuteMsg {
     Receive(cw20::Cw20ReceiveMsg),
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[cw_serde]
+#[derive(QueryResponses)]
 pub enum QueryMsg {
+    #[returns(ConfigResponse)]
     GetConfig {},
+    #[returns(Uint128)]
     Provided { address: String },
+    #[returns(Uint128)]
     TotalProvided {},
+    #[returns(Uint128)]
     Entitled { address: String },
+    #[returns(Uint128)]
     Balance {},
 }
 
-// We define a custom struct for each query response
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[cw_serde]
 pub struct ConfigResponse {
     pub admin: Option<String>,
     pub fee: Decimal,
     pub loan_denom: CheckedLoanDenom,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[cw_serde]
 pub enum LoanMsg {
     ReceiveLoan {},
 }

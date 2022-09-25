@@ -1,5 +1,11 @@
 [workspace]
-members = ["contracts/*"]
+members = ["contracts/*", "debug/*"]
+
+[workspace.package]
+license = "BSD-3"
+authors = ["ekez <ekez@withoutdoing.com>", "grapestem"]
+edition = "2021"
+version = "0.0.1"
 
 [profile.release]
 codegen-units = 1
@@ -11,3 +17,19 @@ debug-assertions = false
 panic = 'abort'
 incremental = false
 overflow-checks = true
+
+[workspace.dependencies]
+cosmwasm-std = "1.1"
+cosmwasm-storage = "1.1"
+cosmwasm-schema = "1.1"
+
+cw-storage-plus = "0.15"
+cw2 = "0.15"
+cw20 = "0.15"
+cw20-base = "0.15"
+cw-multi-test = "0.15"
+
+thiserror = { version = "1" }
+
+cw-simple-loan-receiver = { version = "*", path = "debug/cw-simple-loan-receiver" }
+cw-flash-loan = { version = "*", path = "contracts/cw-flash-loan" }
