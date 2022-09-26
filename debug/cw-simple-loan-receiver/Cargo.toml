@@ -1,9 +1,8 @@
 [package]
-name = "cw-flash-loan"
-license = { workspace = true }
-authors = { workspace = true }
-edition = { workspace = true }
-version = { workspace = true }
+name = "cw-simple-loan-receiver"
+version = "0.1.0"
+authors = ["grapestem"]
+edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -17,11 +16,5 @@ cosmwasm-std = { workspace = true }
 cosmwasm-storage = { workspace = true }
 cosmwasm-schema = { workspace = true }
 cw-storage-plus = { workspace = true }
-cw2 = { workspace = true }
 cw20 = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-cw-multi-test = { workspace = true }
-cw20-base = { workspace = true }
-cw-simple-loan-receiver = { workspace = true }
